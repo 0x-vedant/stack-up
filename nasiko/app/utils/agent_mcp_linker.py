@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-app = FastAPI()
+app = APIRouter()
 
 class LinkRequest(BaseModel):
     agent_artifact_id: str

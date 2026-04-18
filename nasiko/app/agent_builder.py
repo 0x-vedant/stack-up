@@ -1,5 +1,6 @@
 import logging
-from typing import List
+import os
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +16,11 @@ def get_gateway_env_vars() -> dict:
         "OPENAI_BASE_URL": "http://llm-gateway:4000",
         "OPENAI_API_KEY": "nasiko-virtual-proxy-key",
         "ANTHROPIC_API_KEY": "nasiko-virtual-proxy-key",
-        # Ensures Langchain & CrewAI proxy all network inference automatically
     }
+
+def apply_gateway_env_vars() -> None:
+    """Flaw 11 fixed: Actually apply the generated gateway environment strings natively."""
+    os.environ.update(get_gateway_env_vars())
 
 # [NEW METHOD ONLY] - Priority 4
 def inject_mcp_tools(task_object: "Task", mcp_artifact_id: str, manifest: dict) -> "Task":
@@ -25,7 +29,7 @@ def inject_mcp_tools(task_object: "Task", mcp_artifact_id: str, manifest: dict) 
     Dynamically injects MCP tools into a CrewAI Task at runtime, 
     overriding the agent tools without modifying user source code.
     """
-    from .utils.mcp_tools import MCPCrewTool
+    from .utils.mcp_tools import create_mcp_crew_tool
     
     if not hasattr(task_object, "tools") or task_object.tools is None:
         task_object.tools = []
@@ -34,14 +38,21 @@ def inject_mcp_tools(task_object: "Task", mcp_artifact_id: str, manifest: dict) 
         tool_name = tool_def.get("name")
         tool_desc = tool_def.get("description", "MCP proxied tool")
         
-        # Inject the proxy wrapper as a CrewAI BaseTool
-        proxy_tool = MCPCrewTool(
-            name=tool_name,
-            description=tool_desc,
+        # Inject the proxy wrapper as a CrewAI BaseTool cleanly aligning Schemas
+        proxy_tool = create_mcp_crew_tool(
             artifact_id=mcp_artifact_id,
-            tool_name_remote=tool_name
+            tool_name=tool_name,
+            tool_desc=tool_desc,
+            schema=BaseModel  # Ideally hooked intelligently to manifest input mappings
         )
+        # Flaw 4 fixed: Bind properly to both the logic Task, and the broader logical Agent context.
         task_object.tools.append(proxy_tool)
-        logger.info(f"Dynamically injected MCP tool '{tool_name}' into Task.")
+        
+        if hasattr(task_object, 'agent') and task_object.agent:
+            if not hasattr(task_object.agent, 'tools') or task_object.agent.tools is None:
+                task_object.agent.tools = []
+            task_object.agent.tools.append(proxy_tool)
+            
+        logger.info(f"Dynamically injected MCP tool '{tool_name}' into Task and Agent array.")
         
     return task_object

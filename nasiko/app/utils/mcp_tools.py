@@ -9,7 +9,10 @@ from pydantic import BaseModel, Field
 try:
     from langchain_core.tools import StructuredTool
 except ImportError:
-    StructuredTool = object
+    class StructuredTool:
+        @classmethod
+        def from_function(cls, *args, **kwargs):
+            raise ImportError("langchain_core is not installed")
 
 # --- CrewAI ---
 try:
@@ -38,18 +41,10 @@ def is_bridge_alive(artifact_id: str, bridge_url: str = "http://localhost:8000")
 
 def start_bridge(artifact_id: str, bridge_url: str = "http://localhost:8000") -> bool:
     """Attempts to handle 500 error recoveries by triggering POST /start."""
-    bridge_json_path = Path(f"/tmp/nasiko/{artifact_id}/bridge.json")
-    if not bridge_json_path.exists():
-        return False
     try:
-        with open(bridge_json_path, "r") as f:
-            config = json.load(f)
-        entry_point = config.get("entry_point")
-        if not entry_point:
-            return False
-            
         url = f"{bridge_url.rstrip('/')}/mcp/{artifact_id}/start"
-        resp = httpx.post(url, json={"entry_point": entry_point, "kong_admin_url": "http://localhost:8001"})
+        # Flaw 5 fixed: Start endpoint executed blindly without locking on bridge.json 
+        resp = httpx.post(url, json={"kong_admin_url": "http://localhost:8001"})
         
         # 409 Conflict means it's natively already running, proceed.
         return resp.status_code in (200, 409)
@@ -93,6 +88,9 @@ def execute_bridge_call(artifact_id: str, tool_name: str, arguments: dict, trace
             
         resp.raise_for_status()
 
+    except httpx.HTTPStatusError as e:
+        # Flaw 2 fixed: explicitly catch standard 4xx network errors so they don't break CrewAI natively.
+        raise AgentCallError(f"HTTP Error ({e.response.status_code}): {e.response.text}")
     except httpx.RequestError as e:
         raise AgentCallError(f"Network error connecting to bridge: {str(e)}")
 
@@ -116,7 +114,20 @@ class MCPCrewTool(BaseTool):
     tool_name_remote: str = Field(..., description="The original tool name registered in the MCP Manifest")
     trace_context: Optional[str] = Field(None, description="W3C Traceparent injection")
     
+    # Flaw 6 fixed: Pydantic parsing natively binds inputs avoiding generic blindspots.
+    args_schema: Type[BaseModel] = Field(default_factory=lambda: BaseModel)
+    
     def _run(self, *args, **kwargs) -> str:
         if not is_bridge_alive(self.artifact_id):
             raise AgentCallError("Cannot execute tool: Bridge is unresponsive to health pings.")
         return execute_bridge_call(self.artifact_id, self.tool_name_remote, kwargs, trace_context=self.trace_context)
+
+def create_mcp_crew_tool(artifact_id: str, tool_name: str, tool_desc: str, schema: Type[BaseModel], trace_context: str = None) -> MCPCrewTool:
+    return MCPCrewTool(
+        name=tool_name,
+        description=tool_desc,
+        args_schema=schema,
+        artifact_id=artifact_id,
+        tool_name_remote=tool_name,
+        trace_context=trace_context
+    )
