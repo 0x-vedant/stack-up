@@ -210,11 +210,27 @@ class BridgeServer:
             bufsize=0,
         )
         self._proc = proc
+        self._proc_stderr_lines = []
+
+        # Background thread to drain stderr preventing OS pipe buffer deadlock
+        import threading
+        def drain_stderr(proc, lines_list):
+            try:
+                for line in iter(proc.stderr.readline, b""):
+                    # store only last few lines to avoid memory leak
+                    lines_list.append(line.decode(errors="replace"))
+                    if len(lines_list) > 100:
+                        lines_list.pop(0)
+            except Exception:
+                pass
+
+        threading.Thread(target=drain_stderr, args=(proc, self._proc_stderr_lines), daemon=True).start()
 
         # 3. Let the process stabilize
         time.sleep(1)
         if proc.poll() is not None:
-            stderr_output = proc.stderr.read().decode() if proc.stderr else ""
+            time.sleep(0.1) # small wait for thread to finish reading
+            stderr_output = "".join(self._proc_stderr_lines)
             raise BridgeStartError(
                 f"Agent process exited immediately, stderr: {stderr_output}"
             )
@@ -247,7 +263,12 @@ class BridgeServer:
         # 7. Persist to disk
         path = Path(f"/tmp/nasiko/{self.artifact_id}")
         path.mkdir(parents=True, exist_ok=True)
-        (path / "bridge.json").write_text(config.model_dump_json())
+        import tempfile
+        import os
+        fd, temp_path = tempfile.mkstemp(dir=str(path), suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            f.write(config.model_dump_json())
+        os.replace(temp_path, str(path / "bridge.json"))
 
         # 8. Return
         return config

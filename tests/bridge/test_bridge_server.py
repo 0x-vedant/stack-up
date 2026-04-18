@@ -262,14 +262,16 @@ class TestStartMethod:
         with pytest.raises(BridgeStartError, match="ModuleNotFoundError"):
             BridgeServer("x", "/bad.py").start()
 
+    @patch("os.replace")
+    @patch("os.fdopen")
+    @patch("tempfile.mkstemp", return_value=(999, "/tmp/fake.tmp"))
     @patch("nasiko.mcp_bridge.server.Path.mkdir")
-    @patch("nasiko.mcp_bridge.server.Path.write_text")
     @patch("nasiko.mcp_bridge.server.KongRegistrar")
     @patch("nasiko.mcp_bridge.server.time.sleep")
     @patch("nasiko.mcp_bridge.server.subprocess.Popen")
     @patch.object(BridgeServer, "_find_free_port", return_value=8150)
     def test_popen_args_are_safe(
-        self, _port, mock_popen, _sleep, mock_kong, _wt, _mkdir
+        self, _port, mock_popen, _sleep, mock_kong, _mkdir, _mkstemp, _fdopen, _replace
     ):
         """Popen must use a list of args, no shell=True, bufsize=0."""
         mock_popen.return_value = _mock_proc(
@@ -286,14 +288,16 @@ class TestStartMethod:
         assert call_kwargs[1].get("shell") is not True
         assert call_kwargs[1].get("bufsize") == 0
 
+    @patch("os.replace")
+    @patch("os.fdopen")
+    @patch("tempfile.mkstemp", return_value=(999, "/tmp/fake.tmp"))
     @patch("nasiko.mcp_bridge.server.Path.mkdir")
-    @patch("nasiko.mcp_bridge.server.Path.write_text")
     @patch("nasiko.mcp_bridge.server.KongRegistrar")
     @patch("nasiko.mcp_bridge.server.time.sleep")
     @patch("nasiko.mcp_bridge.server.subprocess.Popen")
     @patch.object(BridgeServer, "_find_free_port", return_value=8177)
     def test_bridge_json_persisted_and_parseable(
-        self, _port, mock_popen, _sleep, mock_kong, mock_wt, mock_mkdir
+        self, _port, mock_popen, _sleep, mock_kong, mock_mkdir, mock_mkstemp, mock_fdopen, mock_replace
     ):
         """bridge.json must contain correct port, artifact_id, and schema.
 
@@ -316,8 +320,12 @@ class TestStartMethod:
         mock_kong.return_value.register.assert_called_once_with("myart", 8177)
 
         # ── Verify persisted JSON ───────────────────────────────────────
-        mock_wt.assert_called_once()
-        written = mock_wt.call_args[0][0]
+        mock_mkstemp.assert_called_once()
+        mock_fdopen.assert_called_once_with(999, "w")
+        
+        mock_file = mock_fdopen.return_value.__enter__.return_value
+        mock_file.write.assert_called_once()
+        written = mock_file.write.call_args[0][0]
         restored = BridgeConfig.model_validate_json(written)
         assert restored.artifact_id == "myart"
         assert restored.port == 8177, "Dynamic port must flow to persisted JSON"
