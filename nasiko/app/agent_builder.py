@@ -3,6 +3,21 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
+# [NEW METHOD ONLY] - Track 1.5 / LLM Gateway Injection Hook
+def get_gateway_env_vars() -> dict:
+    """
+    Returns the required environment overrides to force uploaded agents 
+    (LangChain/CrewAI) to use the Nasiko internal LiteLLM proxy instead 
+    of parsing their ZIP files for hardcoded API keys.
+    """
+    return {
+        "OPENAI_API_BASE": "http://llm-gateway:4000",
+        "OPENAI_BASE_URL": "http://llm-gateway:4000",
+        "OPENAI_API_KEY": "nasiko-virtual-proxy-key",
+        "ANTHROPIC_API_KEY": "nasiko-virtual-proxy-key",
+        # Ensures Langchain & CrewAI proxy all network inference automatically
+    }
+
 # [NEW METHOD ONLY] - Priority 4
 def inject_mcp_tools(task_object: "Task", mcp_artifact_id: str, manifest: dict) -> "Task":
     """

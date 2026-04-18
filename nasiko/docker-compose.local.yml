@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  # The LiteLLM Gateway for intercepting zero-code agent LLM execution
+  llm-gateway:
+    image: ghcr.io/berriai/litellm:main-latest
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml
+    command: [ "--config", "/app/config.yaml", "--port", "4000" ]
+    environment:
+      # Provider keys should be securely managed here by the platform
+      # not hardcoded inside the agent.zip files.
+      - LITELLM_MASTER_KEY=nasiko-virtual-proxy-key
+    networks:
+      - nasiko_net
+
+  # Core Nasiko app (assuming existing definition)
+  nasiko-server:
+    image: nasiko-app:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_GATEWAY_URL=http://llm-gateway:4000
+    depends_on:
+      - llm-gateway
+    networks:
+      - nasiko_net
+
+networks:
+  nasiko_net:
+    driver: bridge
