@@ -22,6 +22,14 @@ from pydantic import BaseModel
 from nasiko.mcp_bridge.kong import KongRegistrar
 from nasiko.mcp_bridge.models import BridgeConfig
 
+from nasiko.app.utils.observability.mcp_tracing import (
+    bootstrap_mcp_tracing,
+    instrument_mcp_bridge,
+    create_tool_call_span,
+    record_tool_result,
+    record_tool_error,
+)
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Custom exceptions
@@ -268,6 +276,8 @@ class BridgeServer:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app = FastAPI(title="Nasiko MCP Bridge")
+instrument_mcp_bridge(app)
+_tracer = bootstrap_mcp_tracing("mcp-bridge")
 
 _bridges: dict[str, BridgeServer] = {}
 
@@ -324,8 +334,17 @@ def call_tool(artifact_id: str, body: ToolCallRequest) -> dict[str, Any]:
     """Proxy a tool call to the running MCP agent."""
     if artifact_id not in _bridges:
         raise HTTPException(status_code=404, detail="Bridge not found")
-    try:
-        result = _bridges[artifact_id].call_tool(body.tool_name, body.arguments)
-        return result
-    except MCPToolCallError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    with create_tool_call_span(
+        tracer=_tracer,
+        tool_name=body.tool_name,
+        arguments=body.arguments,
+        server_name=artifact_id,
+        artifact_id=artifact_id,
+    ) as span:
+        try:
+            result = _bridges[artifact_id].call_tool(body.tool_name, body.arguments)
+            record_tool_result(span, result)
+            return result
+        except MCPToolCallError as exc:
+            record_tool_error(span, exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
