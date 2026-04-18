@@ -31,13 +31,31 @@ class GenerateRequest(BaseModel):
     source_path: str = Field(..., description="Absolute path to the Python source file")
 
 
+class InputSchemaResponse(BaseModel):
+    type: str
+    properties: dict[str, dict]
+    required: list[str]
+
+
+class MCPToolResponse(BaseModel):
+    name: str
+    description: str | None = None
+    input_schema: InputSchemaResponse
+
+
+class MCPManifestResponse(BaseModel):
+    artifact_id: str
+    generated_at: str
+    tools: list[MCPToolResponse]
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
 @router.post(
     "/generate",
-    response_model=MCPManifest,
+    response_model=MCPManifestResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Generate an MCP manifest from source code",
 )
@@ -66,7 +84,7 @@ async def api_generate_manifest(request: GenerateRequest) -> Any:
 
 @router.get(
     "/{artifact_id}",
-    response_model=MCPManifest,
+    response_model=MCPManifestResponse,
     summary="Retrieve a previously generated MCP manifest",
 )
 async def api_get_manifest(artifact_id: str) -> Any:

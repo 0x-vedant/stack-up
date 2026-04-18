@@ -46,6 +46,9 @@ class MCPManifest(TypedDict):
 
 _ARTIFACT_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 _MANIFEST_ROOT = "/tmp/nasiko"
+ALLOWED_SOURCE_ROOT = os.environ.get(
+    "NASIKO_SOURCE_ROOT", "/tmp/nasiko/uploads"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -82,9 +85,20 @@ def _build_input_schema(tool: ToolDefinition) -> InputSchema:
     )
 
 
+def _validate_source_path(source_path: str) -> None:
+    real = os.path.realpath(source_path)
+    allowed = os.path.realpath(ALLOWED_SOURCE_ROOT)
+    if not real.startswith(allowed + os.sep) and real != allowed:
+        raise ValueError(
+            f"source_path outside allowed root: {source_path!r}"
+        )
+
+
 def _tool_to_mcp(tool: ToolDefinition) -> MCPTool:
     """Convert a ``ToolDefinition`` from the parser into an ``MCPTool``."""
 
+    # description is None when the tool has no docstring.
+    # Downstream consumers (R4) must handle None explicitly.
     return MCPTool(
         name=tool["name"],
         description=tool["docstring"],
@@ -114,6 +128,7 @@ def generate_manifest(artifact_id: str, source_path: str) -> MCPManifest:
     """
 
     _validate_artifact_id(artifact_id)
+    _validate_source_path(source_path)
 
     # 1. Read source
     with open(source_path, "r", encoding="utf-8") as f:
@@ -164,10 +179,8 @@ def load_manifest(artifact_id: str) -> MCPManifest:
 
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
-            data = f.read()
+            return json.load(f)
     except FileNotFoundError:
         raise FileNotFoundError(
             f"Manifest not found for artifact_id={artifact_id!r}"
         )
-
-    return json.loads(data)
