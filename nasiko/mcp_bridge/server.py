@@ -276,6 +276,14 @@ class BridgeServer:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app = FastAPI(title="Nasiko MCP Bridge")
+
+# Mount R1 ingest endpoint so /ingest is reachable
+try:
+    from nasiko.api.v1.ingest import router as ingest_router
+    app.include_router(ingest_router)
+except ImportError:
+    pass
+
 instrument_mcp_bridge(app)
 _tracer = bootstrap_mcp_tracing("mcp-bridge")
 

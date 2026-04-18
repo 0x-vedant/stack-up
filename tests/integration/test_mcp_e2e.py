@@ -9,7 +9,7 @@ class TestMCPEndToEnd(unittest.TestCase):
     @patch("nasiko.app.agent_builder.get_gateway_env_vars")
     def test_llm_gateway_forces_virtualization(self, mock_env):
         """Validates that agent creation forcefully overwrites the standard API keys."""
-        mock_env.return_value = {"OPENAI_API_KEY": "nasiko-virtual-proxy-key"}
+        mock_env.return_value = {"OPENAI_API_KEY": "nasiko-virtual-proxy-key", "OPENAI_BASE_URL": "http://litellm:4000/v1"}
         
         # Testing integration of environment variables from agent_builder
         from nasiko.app.agent_builder import get_gateway_env_vars

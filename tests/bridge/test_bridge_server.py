@@ -559,7 +559,7 @@ class TestConstraints:
     def _load_sources(self):
         self.sources: dict[str, str] = {}
         for f in _SOURCE_DIR.glob("*.py"):
-            self.sources[f.name] = f.read_text()
+            self.sources[f.name] = f.read_text(encoding="utf-8")
 
     def test_no_shell_true(self):
         """No Popen (or any call) may pass shell=True."""
