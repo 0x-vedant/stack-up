@@ -54,20 +54,17 @@ def mark_mcp_ready(artifact_id: str) -> None:
     logger.info(f"Orchestration State caching ready flip for {artifact_id}")
     
     # Priority Fix: the Linker API asserts ready status off bridge.json natively.
-    bridge_file = Path(f"/tmp/nasiko/{artifact_id}/bridge.json")
-    if bridge_file.exists():
-        try:
-            with open(bridge_file, "r") as f:
-                data = json.load(f)
-            data["status"] = "ready"
-            
-            import tempfile, os
-            fd, tmp = tempfile.mkstemp(dir=bridge_file.parent, suffix=".tmp")
-            with os.fdopen(fd, "w") as f:
-                json.dump(data, f, indent=4)
-            os.replace(tmp, bridge_file)
-        except Exception as e:
-            logger.error(f"Failed to flip bridge.json status for {artifact_id}: {e}")
+    # Use the R2 /status endpoint to respect component ownership boundaries.
+    import httpx
+    try:
+        response = httpx.patch(
+            f"http://localhost:8000/mcp/{artifact_id}/status",
+            json={"status": "ready"},
+            timeout=5.0
+        )
+        response.raise_for_status()
+    except Exception as e:
+        logger.error(f"Failed to flip bridge.json status for {artifact_id}: {e}")
             
     # Updates the bridge configuration mock status 
     state = OrchestrateState(artifact_id)

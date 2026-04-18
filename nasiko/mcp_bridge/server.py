@@ -356,6 +356,36 @@ def health_check(artifact_id: str) -> dict[str, Any]:
     return {"artifact_id": artifact_id, "alive": alive}
 
 
+class StatusUpdateRequest(BaseModel):
+    status: str
+
+
+@app.patch("/mcp/{artifact_id}/status")
+def update_status(artifact_id: str, body: StatusUpdateRequest) -> dict[str, Any]:
+    """Allow orchestrators to update the bridge status safely."""
+    # Find the bridge configuration
+    bridge_file = Path(f"/tmp/nasiko/{artifact_id}/bridge.json")
+    if not bridge_file.exists():
+        raise HTTPException(status_code=404, detail="Bridge config not found")
+    
+    import os, tempfile
+    try:
+        with open(bridge_file, "r") as f:
+            data = json.load(f)
+            
+        data["status"] = body.status
+        
+        # Atomic write
+        fd, tmp = tempfile.mkstemp(dir=bridge_file.parent, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=4)
+        os.replace(tmp, bridge_file)
+        
+        return {"artifact_id": artifact_id, "status": body.status}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.post("/mcp/{artifact_id}/call")
 def call_tool(artifact_id: str, body: ToolCallRequest) -> dict[str, Any]:
     """Proxy a tool call to the running MCP agent."""

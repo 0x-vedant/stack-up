@@ -133,7 +133,8 @@ def _validate_source_path(source_path: str) -> None:
     preventing symlink traversal attacks.
     """
     real = os.path.realpath(os.path.abspath(source_path))
-    allowed = os.path.realpath(os.path.abspath(ALLOWED_SOURCE_ROOT))
+    allowed_root = os.environ.get("NASIKO_SOURCE_ROOT", ALLOWED_SOURCE_ROOT)
+    allowed = os.path.realpath(os.path.abspath(allowed_root))
     if not (real.startswith(allowed + os.sep) or real == allowed):
         raise ValueError(
             f"source_path outside allowed root: {source_path!r}"

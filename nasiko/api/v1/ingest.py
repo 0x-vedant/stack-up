@@ -1,4 +1,4 @@
-"""Ingest endpoint — upload, detect, and deploy MCP server artifacts.
+"""Ingest endpoint -- upload, detect, and deploy MCP server artifacts.
 
 This is the E2E pipeline glue: R1 detection -> R3 manifest generation ->
 R2 bridge startup -> R4 orchestration event.
@@ -12,6 +12,7 @@ import shutil
 import uuid
 import zipfile
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
@@ -33,7 +34,7 @@ async def ingest_artifact(file: UploadFile = File(...)):
       1. Validate zip file
       2. Extract to temp directory
       3. Run R1 artifact-type detection
-      4. If MCP_SERVER: trigger R3 manifest generation
+      4. If MCP_SERVER: persist code + trigger R3 manifest generation
       5. Return IngestionRecord with deployment status
 
     Returns 200 with IngestionRecord on success.
@@ -60,15 +61,33 @@ async def ingest_artifact(file: UploadFile = File(...)):
         record = detect_artifact_type(extract_dir)
         result = record.model_dump(mode='json')
 
+        # Persist extracted code to /tmp/nasiko/{artifact_id}/code/
+        # so R2 can later spawn the subprocess. The temp extract_dir
+        # is cleaned up in the finally block; this is the persistent copy.
+        persist_dir = f"/tmp/nasiko/{record.artifact_id}/code"
+        os.makedirs(persist_dir, exist_ok=True)
+        for item in os.listdir(extract_dir):
+            src = os.path.join(extract_dir, item)
+            dst = os.path.join(persist_dir, item)
+            if os.path.isdir(src):
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
+
+        # Update result with the persisted code path so R2 knows where to find it
+        result["code_path"] = persist_dir
+
         # R3: If MCP server, generate manifest automatically
         if record.artifact_type == ArtifactType.MCP_SERVER and record.entry_point:
             try:
-                source_file = os.path.join(extract_dir, record.entry_point)
+                # Convert the path separators to standard posix so R3 path validation 
+                # (which does string prefix checking) doesn't fail on Windows.
+                source_file = Path(os.path.join(persist_dir, record.entry_point)).as_posix()
                 if os.path.exists(source_file):
                     # Generate manifest using R3
-                    # Must set NASIKO_SOURCE_ROOT to allow the upload dir
+                    # Must set NASIKO_SOURCE_ROOT to allow the persist dir
                     old_root = os.environ.get("NASIKO_SOURCE_ROOT")
-                    os.environ["NASIKO_SOURCE_ROOT"] = "/tmp/nasiko/uploads"
+                    os.environ["NASIKO_SOURCE_ROOT"] = "/tmp/nasiko"
                     try:
                         from R3.generator import generate_manifest
                         manifest = generate_manifest(record.artifact_id, source_file)
@@ -101,4 +120,5 @@ async def ingest_artifact(file: UploadFile = File(...)):
     except zipfile.BadZipFile:
         raise HTTPException(400, "Invalid or corrupted zip file")
     finally:
+        # Only remove the temp extraction dir -- persisted code stays
         shutil.rmtree(extract_dir, ignore_errors=True)
