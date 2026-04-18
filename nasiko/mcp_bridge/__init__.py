@@ -2,13 +2,23 @@
 
 from nasiko.mcp_bridge.models import BridgeConfig
 from nasiko.mcp_bridge.kong import KongRegistrar, KongRegistrationError
-from nasiko.mcp_bridge.server import (
-    BridgeServer,
-    BridgeStartError,
-    MCPHandshakeError,
-    MCPToolCallError,
-    app,
-)
+
+try:
+    from nasiko.mcp_bridge.server import (
+        BridgeServer,
+        BridgeStartError,
+        MCPHandshakeError,
+        MCPToolCallError,
+        app,
+    )
+except ImportError:
+    # server.py requires opentelemetry + phoenix which may not be installed
+    # in lightweight test environments. The core models/kong are still usable.
+    BridgeServer = None
+    BridgeStartError = None
+    MCPHandshakeError = None
+    MCPToolCallError = None
+    app = None
 
 __all__ = [
     "BridgeConfig",

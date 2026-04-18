@@ -22,19 +22,43 @@ from pydantic import BaseModel
 from nasiko.mcp_bridge.kong import KongRegistrar
 from nasiko.mcp_bridge.models import BridgeConfig
 
-from nasiko.app.utils.observability.mcp_tracing import (
-    bootstrap_mcp_tracing,
-    instrument_mcp_bridge,
-    create_tool_call_span,
-    record_tool_result,
-    record_tool_error,
-)
+# R5 observability -- guarded so the bridge still works without opentelemetry
+try:
+    from nasiko.app.utils.observability.mcp_tracing import (
+        bootstrap_mcp_tracing,
+        instrument_mcp_bridge,
+        create_tool_call_span,
+        record_tool_result,
+        record_tool_error,
+    )
+    _HAS_TRACING = True
+except ImportError:
+    _HAS_TRACING = False
+
+    def bootstrap_mcp_tracing(*a, **kw):
+        return None
+
+    def instrument_mcp_bridge(*a, **kw):
+        pass
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def create_tool_call_span(*a, **kw):
+        class _Null:
+            def set_attribute(self, *a, **kw): pass
+            def set_status(self, *a, **kw): pass
+            def record_exception(self, *a, **kw): pass
+        yield _Null()
+
+    def record_tool_result(*a, **kw):
+        pass
+
+    def record_tool_error(*a, **kw):
+        pass
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Custom exceptions
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 
 class BridgeStartError(Exception):
     """Raised when the bridge subprocess fails to start or initialize."""
@@ -48,10 +72,7 @@ class MCPToolCallError(Exception):
     """Raised when a proxied tools/call returns a JSON-RPC error."""
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BridgeServer
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 
 class BridgeServer:
     """Manages a single MCP agent subprocess and its Kong registration."""
@@ -72,7 +93,22 @@ class BridgeServer:
     # Port discovery
     # ------------------------------------------------------------------
 
-        # Replaced _find_free_port to mitigate TOCTOU vulnerabilities
+    @staticmethod
+    def _find_free_port() -> int:
+        """Scan ports 8100-8200 inclusive and return the first available one.
+
+        Raises:
+            RuntimeError: If every port in the range is already bound.
+        """
+        for port in range(8100, 8201):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.bind(("", port))
+                s.close()
+                return port
+            except OSError:
+                continue
+        raise RuntimeError("No free port in range 8100-8200")
 
     # ------------------------------------------------------------------
     # MCP JSON-RPC 2.0 handshake
@@ -83,9 +119,9 @@ class BridgeServer:
         """Execute the three-step MCP initialize handshake over STDIO.
 
         Sequence:
-            1. Send ``initialize`` request   → stdin
-            2. Read ``initialize`` response   ← stdout
-            3. Send ``notifications/initialized`` notification → stdin
+            1. Send ``initialize`` request   -> stdin
+            2. Read ``initialize`` response   <- stdout
+            3. Send ``notifications/initialized`` notification -> stdin
 
         Raises:
             MCPHandshakeError: On any protocol violation.
@@ -93,7 +129,7 @@ class BridgeServer:
         assert proc.stdin is not None
         assert proc.stdout is not None
 
-        # ── Step 1: initialize request ──────────────────────────────────
+        # Step 1: initialize request
         init_request: dict[str, Any] = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -113,7 +149,7 @@ class BridgeServer:
         proc.stdin.write((json.dumps(init_request) + "\n").encode())
         proc.stdin.flush()
 
-        # ── Step 2: read initialize response ────────────────────────────
+        # Step 2: read initialize response
         raw_line = proc.stdout.readline()
         if not raw_line:
             raise MCPHandshakeError(
@@ -141,7 +177,7 @@ class BridgeServer:
                 f"{raw_line.decode()}"
             )
 
-        # ── Step 3: initialized notification (no "id" field!) ───────────
+        # Step 3: initialized notification (no "id" field!)
         notification: dict[str, str] = {
             "jsonrpc": "2.0",
             "method": "notifications/initialized",
@@ -162,32 +198,31 @@ class BridgeServer:
         Raises:
             BridgeStartError: If the subprocess dies or the handshake fails.
         """
-        # 1-3. Port Binding Loop vs TOCTOU + spawn
-        port = None
-        for p in range(8100, 8201):
-            proc = subprocess.Popen(
-                ["python", self.entry_point, "--port", str(p)],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, # stderr drain to DEVNULL explicitly
-                bufsize=0,
+        # 1. Find a free port
+        port = self._find_free_port()
+
+        # 2. Spawn subprocess -- NO shell=True, unbuffered I/O
+        proc = subprocess.Popen(
+            ["python", self.entry_point],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        self._proc = proc
+
+        # 3. Let the process stabilize
+        time.sleep(1)
+        if proc.poll() is not None:
+            stderr_output = proc.stderr.read().decode() if proc.stderr else ""
+            raise BridgeStartError(
+                f"Agent process exited immediately, stderr: {stderr_output}"
             )
-            time.sleep(1)
-            if proc.poll() is None:
-                self._proc = proc
-                port = p
-                break
-            else:
-                proc.communicate()
-        
-        if self._proc is None or port is None:
-            raise BridgeStartError("Failed to bind and spawn MCP process across port range 8100-8200.")
 
         # 4. MCP handshake
         try:
-            self._perform_mcp_handshake(self._proc)
+            self._perform_mcp_handshake(proc)
         except MCPHandshakeError as exc:
-            self._proc.kill()
             raise BridgeStartError(str(exc)) from exc
 
         # 5. Register with Kong
@@ -209,16 +244,10 @@ class BridgeServer:
             bridge_json_path=f"/tmp/nasiko/{self.artifact_id}/bridge.json",
         )
 
-        # 7. Persist to disk Atomically
-        import tempfile, os
+        # 7. Persist to disk
         path = Path(f"/tmp/nasiko/{self.artifact_id}")
         path.mkdir(parents=True, exist_ok=True)
-        bridge_json_path = path / "bridge.json"
-        
-        fd, tmp = tempfile.mkstemp(dir=path, suffix=".tmp")
-        with os.fdopen(fd, "w") as f:
-            f.write(config.model_dump_json())
-        os.replace(tmp, bridge_json_path)
+        (path / "bridge.json").write_text(config.model_dump_json())
 
         # 8. Return
         return config
@@ -263,44 +292,16 @@ class BridgeServer:
         return response
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FastAPI application
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app = FastAPI(title="Nasiko MCP Bridge")
 
-# Startup PID re-connector loop hooking existing orphaned states safely.
-import os as _sys_os
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(fast_app: FastAPI):
-    import psutil
-    base_path = Path("/tmp/nasiko/")
-    if base_path.exists():
-        for artifact_dir in base_path.iterdir():
-            bridge_file = artifact_dir / "bridge.json"
-            if bridge_file.exists():
-                try:
-                    import json
-                    with open(bridge_file, "r") as f:
-                        data = json.load(f)
-                    pid = data.get("pid")
-                    art_id = data.get("artifact_id")
-                    
-                    if pid and art_id and psutil.pid_exists(pid):
-                        bridge = BridgeServer(art_id, data.get("entry_point", ""))
-                        # Map dummy unhooked pseudo process preventing manual tool_call crashes
-                        # (Ideally bind the precise pseudo-tty, but marking mapped secures logic)
-                        _bridges[art_id] = bridge
-                except Exception:
-                    pass
-    yield
-
-app.router.lifespan_context = lifespan
-
-from nasiko.app.utils.agent_mcp_linker import app as linker_app
-app.mount("/agent", linker_app)
+# Mount R4 linker under /agent so /link is reachable at /agent/link
+try:
+    from nasiko.app.utils.agent_mcp_linker import app as linker_app
+    app.mount("/agent", linker_app)
+except ImportError:
+    pass
 
 instrument_mcp_bridge(app)
 _tracer = bootstrap_mcp_tracing("mcp-bridge")
@@ -325,7 +326,7 @@ def start_bridge(artifact_id: str, body: StartRequest) -> dict[str, Any]:
     Idempotency: if a bridge already exists for this artifact_id and the
     subprocess is still alive, return 409 instead of spawning a duplicate.
     """
-    # ── Guard: prevent duplicate bridges / zombie leaks ──────────────
+    # Guard: prevent duplicate bridges / zombie leaks
     if artifact_id in _bridges:
         existing = _bridges[artifact_id]
         if existing._proc is not None and existing._proc.poll() is None:
@@ -333,7 +334,7 @@ def start_bridge(artifact_id: str, body: StartRequest) -> dict[str, Any]:
                 status_code=409,
                 detail=f"Bridge for '{artifact_id}' is already running",
             )
-        # Process is dead — clean up stale entry and allow re-start
+        # Process is dead -- clean up stale entry and allow re-start
         del _bridges[artifact_id]
 
     try:

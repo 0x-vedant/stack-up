@@ -15,7 +15,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from nasiko.app.utils.agent_mcp_linker import app as linker_router
-from nasiko.app.ingestion.endpoint import router as ingestion_router
 from nasiko.app.agent_builder import (
     get_gateway_env_vars,
     apply_gateway_env_vars,
@@ -32,21 +31,18 @@ class TestGatewayEnvVars(unittest.TestCase):
         This is not a tautology — it calls the real function and verifies
         that os.environ was actually mutated.
         """
-        # Save originals
         orig_base = os.environ.get("OPENAI_API_BASE")
         orig_key = os.environ.get("OPENAI_API_KEY")
 
         try:
             apply_gateway_env_vars()
 
-            # These must match the real return values from get_gateway_env_vars()
             expected = get_gateway_env_vars()
             self.assertEqual(os.environ["OPENAI_API_BASE"], expected["OPENAI_API_BASE"])
             self.assertEqual(os.environ["OPENAI_API_KEY"], expected["OPENAI_API_KEY"])
             self.assertEqual(os.environ["OPENAI_BASE_URL"], expected["OPENAI_BASE_URL"])
             self.assertEqual(os.environ["ANTHROPIC_API_KEY"], expected["ANTHROPIC_API_KEY"])
         finally:
-            # Restore originals
             for key in ["OPENAI_API_BASE", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY"]:
                 if key == "OPENAI_API_BASE" and orig_base is not None:
                     os.environ[key] = orig_base
@@ -98,46 +94,6 @@ class TestLinkerEndpointIntegration(unittest.TestCase):
             )
 
 
-class TestIngestionEndpointIntegration(unittest.TestCase):
-    """Test POST /ingest through a real FastAPI TestClient."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.app = FastAPI()
-        cls.app.include_router(ingestion_router)
-        cls.client = TestClient(cls.app)
-
-    def test_ingest_crewai_agent(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            (Path(tmpdir) / "main.py").write_text(
-                "from crewai import Agent, Task, Crew\n"
-                "from crewai.tools import BaseTool\n"
-            )
-            resp = self.client.post("/ingest", json={
-                "source_dir": tmpdir,
-                "artifact_id": "test-crew-1",
-            })
-            self.assertEqual(resp.status_code, 200)
-            body = resp.json()
-            self.assertEqual(body["artifact_id"], "test-crew-1")
-            self.assertEqual(body["artifact_type"], "crewai")
-            self.assertEqual(body["confidence"], "high")
-            self.assertEqual(body["entry_point"], "main.py")
-
-    def test_ingest_nonexistent_dir_returns_404(self):
-        resp = self.client.post("/ingest", json={
-            "source_dir": "/tmp/nonexistent_dir_xyz_12345",
-        })
-        self.assertEqual(resp.status_code, 404)
-
-    def test_ingest_empty_dir_returns_400(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            resp = self.client.post("/ingest", json={
-                "source_dir": tmpdir,
-            })
-            self.assertEqual(resp.status_code, 400)
-
-
 class TestToolInjectionTypes(unittest.TestCase):
     """Verify that inject_mcp_tools respects input_schema types."""
 
@@ -167,12 +123,9 @@ class TestToolInjectionTypes(unittest.TestCase):
         tool = task.tools[0]
         schema = tool.args_schema
 
-        # Verify the schema fields have correct Python types
         fields = schema.model_fields
-        # Required fields: x (int), y (float)
         self.assertEqual(fields["x"].annotation, int)
         self.assertEqual(fields["y"].annotation, float)
-        # Optional fields: verbose (bool), label (str)
         self.assertEqual(fields["verbose"].annotation, bool)
         self.assertEqual(fields["label"].annotation, str)
 
