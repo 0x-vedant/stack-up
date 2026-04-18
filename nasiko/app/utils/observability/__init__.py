@@ -3,7 +3,12 @@ Observability utilities for automatic tracing injection
 """
 
 # Runtime imports - always available
-from .tracing_utils import bootstrap_tracing
+try:
+    from .tracing_utils import bootstrap_tracing
+    __all__ = ["bootstrap_tracing"]
+except ImportError:
+    bootstrap_tracing = None
+    __all__ = []
 
 # Build-time imports - only available during injection
 try:

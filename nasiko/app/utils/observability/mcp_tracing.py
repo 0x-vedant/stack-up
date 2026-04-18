@@ -109,13 +109,7 @@ def bootstrap_mcp_tracing(
             auto_instrument=False,
         )
 
-        # --- Step 4: add the span exporter ------------------------------------
-        # SimpleSpanProcessor exports each span synchronously as soon as it
-        # ends.  This is simpler than BatchSpanProcessor and fine for the
-        # bridge's traffic volume.
-        provider.add_span_processor(
-            SimpleSpanProcessor(OTLPSpanExporter(endpoint=endpoint))
-        )
+        # --- Step 4 (Removed manual processor because register() already adds it) ---
 
         # --- Step 5: obtain a Tracer from the provider -------------------------
         # A Tracer is a lightweight object that creates spans.  We name it after
@@ -289,9 +283,7 @@ def record_tool_result(span, result):
         span.set_attribute("mcp.tool.result", json.dumps(result))
         span.set_status(StatusCode.OK)
     except Exception as exc:
-        # Don't let a serialisation failure crash the request — just log it.
-        logger.warning(f"Failed to record tool result on span: {exc}")
-        span.set_status(StatusCode.OK)
+        span.set_status(StatusCode.ERROR, str(exc))
 
 
 # ============================================================================

@@ -276,6 +276,9 @@ class BridgeServer:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app = FastAPI(title="Nasiko MCP Bridge")
+from nasiko.app.utils.agent_mcp_linker import app as linker_app
+app.mount("/agent", linker_app)
+
 instrument_mcp_bridge(app)
 _tracer = bootstrap_mcp_tracing("mcp-bridge")
 

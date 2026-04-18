@@ -35,14 +35,6 @@ class OrchestrateState:
         
         os.replace(temp_path, self.state_file)
 
-# Flaw 2 Integration Hook
-def mark_mcp_ready(artifact_id: str) -> None:
-    """Invoked by the redis listener to safely swap backend orchestration flags."""
-    logger.info(f"Orchestration State caching ready flip for {artifact_id}")
-    # Updates the bridge configuration mock status 
-    state = OrchestrateState(artifact_id)
-    state.complete()
-
     def log_invocation(self, tool_name: str, args: Any, result: Any):
         state = self._load()
         state["steps"].append({
@@ -57,3 +49,10 @@ def mark_mcp_ready(artifact_id: str) -> None:
         state["status"] = "completed"
         self._save(state)
 
+# Flaw 2 Integration Hook
+def mark_mcp_ready(artifact_id: str) -> None:
+    """Invoked by the redis listener to safely swap backend orchestration flags."""
+    logger.info(f"Orchestration State caching ready flip for {artifact_id}")
+    # Updates the bridge configuration mock status 
+    state = OrchestrateState(artifact_id)
+    state.complete()

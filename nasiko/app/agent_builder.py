@@ -1,6 +1,6 @@
 import logging
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model, Field as PydanticField
 
 logger = logging.getLogger(__name__)
 
@@ -29,22 +29,32 @@ def inject_mcp_tools(task_object: "Task", mcp_artifact_id: str, manifest: dict) 
     Dynamically injects MCP tools into a CrewAI Task at runtime, 
     overriding the agent tools without modifying user source code.
     """
-    from .utils.mcp_tools import create_mcp_crew_tool
+    from .utils.mcp_tools import MCPCrewTool
+    import os
+    os.environ.update(get_gateway_env_vars())
     
     if not hasattr(task_object, "tools") or task_object.tools is None:
         task_object.tools = []
         
     for tool_def in manifest.get("tools", []):
-        tool_name = tool_def.get("name")
-        tool_desc = tool_def.get("description", "MCP proxied tool")
+        props = tool_def.get("input_schema", {}).get("properties", {})
+        required = set(tool_def.get("input_schema", {}).get("required", []))
+        fields = {
+            k: (str, PydanticField(...)) if k in required
+            else (str, PydanticField(None))
+            for k in props
+        }
+        DynamicSchema = create_model(f"{tool_def['name']}_schema", **fields)
         
         # Inject the proxy wrapper as a CrewAI BaseTool cleanly aligning Schemas
-        proxy_tool = create_mcp_crew_tool(
+        proxy_tool = MCPCrewTool(
+            name=tool_def.get("name"),
+            description=tool_def.get("description", "MCP proxied tool"),
             artifact_id=mcp_artifact_id,
-            tool_name=tool_name,
-            tool_desc=tool_desc,
-            schema=BaseModel  # Ideally hooked intelligently to manifest input mappings
+            tool_name_remote=tool_def.get("name"),
+            args_schema=DynamicSchema
         )
+        
         # Flaw 4 fixed: Bind properly to both the logic Task, and the broader logical Agent context.
         task_object.tools.append(proxy_tool)
         
@@ -53,6 +63,6 @@ def inject_mcp_tools(task_object: "Task", mcp_artifact_id: str, manifest: dict) 
                 task_object.agent.tools = []
             task_object.agent.tools.append(proxy_tool)
             
-        logger.info(f"Dynamically injected MCP tool '{tool_name}' into Task and Agent array.")
+        logger.info(f"Dynamically injected MCP tool '{tool_def.get('name')}' into Task and Agent array.")
         
     return task_object
