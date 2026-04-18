@@ -1,27 +1,27 @@
+[tool.poetry]
+name = "nasiko-r1-ingestion"
+version = "1.0.0"
+description = "R1 Upload & Artifact Detection for Nasiko MCP Hackathon"
+authors = ["Your Name <your.email@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.104"
+pydantic = {extras = ["email"], version = "^2.5"}
+pytest = "^7.4"
+
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
-[project]
-name = "nasiko"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-    "fastapi>=0.104.0",
-    "pydantic>=2.0.0",
-    "uvicorn>=0.24.0",
-    "python-multipart>=0.0.6",
-]
+[[tool.poetry.packages]]
+include = "app"
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "httpx>=0.25.0",
-]
+[[tool.poetry.packages]]
+include = "api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["nasiko"]
-
-[tool.setuptools.packages.find]
-where = ["nasiko"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
