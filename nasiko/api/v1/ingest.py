@@ -18,7 +18,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 
 from nasiko.app.ingestion.detector import detect_artifact_type
-from nasiko.app.ingestion.exceptions import AmbiguousArtifactError
+from nasiko.app.ingestion.exceptions import AmbiguousArtifactError, MissingStructureError
 from nasiko.app.ingestion.models import ArtifactType
 
 logger = logging.getLogger("nasiko.ingest")
@@ -116,6 +116,11 @@ async def ingest_artifact(file: UploadFile = File(...)):
         raise HTTPException(
             422,
             {"error": "AMBIGUOUS_ARTIFACT", "detail": e.reason}
+        )
+    except MissingStructureError as e:
+        raise HTTPException(
+            422,
+            {"error": "MISSING_STRUCTURE", "detail": e.reason}
         )
     except zipfile.BadZipFile:
         raise HTTPException(400, "Invalid or corrupted zip file")

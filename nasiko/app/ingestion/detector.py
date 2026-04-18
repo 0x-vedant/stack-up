@@ -3,7 +3,7 @@ import ast
 import uuid
 from typing import Set, Optional, List
 from .models import IngestionRecord, ArtifactType, DetectionConfidence
-from .exceptions import AmbiguousArtifactError
+from .exceptions import AmbiguousArtifactError, MissingStructureError
 
 # Guard against zip-bomb / DoS — abort if more than this many .py files
 MAX_PY_FILES = 500
@@ -59,8 +59,19 @@ def detect_artifact_type(source_path: str) -> IngestionRecord:
                 elif fallback_entry is None:
                     fallback_entry = rel_path
 
-    if entry_point is None:
-        entry_point = fallback_entry
+    # STEP 4: Enforce strict structure contract
+    # Must have src/main.py, Dockerfile, docker-compose.yml
+    expected_entry = os.path.join("src", "main.py")
+    if not os.path.isfile(os.path.join(source_path, expected_entry)):
+        raise MissingStructureError("Missing required file: src/main.py")
+    
+    if not os.path.isfile(os.path.join(source_path, "Dockerfile")):
+        raise MissingStructureError("Missing required file: Dockerfile")
+        
+    if not os.path.isfile(os.path.join(source_path, "docker-compose.yml")) and not os.path.isfile(os.path.join(source_path, "docker-compose.yaml")):
+        raise MissingStructureError("Missing required file: docker-compose.yml")
+
+    entry_point = os.path.join("src", "main.py")
 
     # ── STEP 2: AST analysis for framework imports ──────────────────
     signals: Set[str] = set()

@@ -67,7 +67,7 @@ class TestFullPipelineE2E(unittest.TestCase):
     def test_upload_mcp_server_generates_manifest_with_all_types(self):
         """Upload zip → R1 detects MCP_SERVER → R3 generates manifest with tools + resources + prompts."""
         client = _build_client()
-        zip_buf = _create_zip({"server.py": MCP_SERVER_SOURCE})
+        zip_buf = _create_zip({"src/main.py": MCP_SERVER_SOURCE, "Dockerfile": "F", "docker-compose.yml": "V"})
 
         resp = client.post(
             "/ingest",
@@ -103,7 +103,7 @@ class TestFullPipelineE2E(unittest.TestCase):
     def test_manifest_tool_schemas_are_correct(self):
         """Tool input_schema has correct types and required fields."""
         client = _build_client()
-        zip_buf = _create_zip({"server.py": MCP_SERVER_SOURCE})
+        zip_buf = _create_zip({"src/main.py": MCP_SERVER_SOURCE, "Dockerfile": "F", "docker-compose.yml": "V"})
 
         resp = client.post(
             "/ingest",
@@ -122,7 +122,7 @@ class TestFullPipelineE2E(unittest.TestCase):
     def test_manifest_prompt_has_optional_params(self):
         """Prompt with default parameter marks it as not required."""
         client = _build_client()
-        zip_buf = _create_zip({"server.py": MCP_SERVER_SOURCE})
+        zip_buf = _create_zip({"src/main.py": MCP_SERVER_SOURCE, "Dockerfile": "F", "docker-compose.yml": "V"})
 
         resp = client.post(
             "/ingest",
@@ -139,7 +139,7 @@ class TestFullPipelineE2E(unittest.TestCase):
     def test_manifest_persisted_to_disk(self):
         """After upload, manifest.json exists at /tmp/nasiko/{artifact_id}/manifest.json."""
         client = _build_client()
-        zip_buf = _create_zip({"server.py": MCP_SERVER_SOURCE})
+        zip_buf = _create_zip({"src/main.py": MCP_SERVER_SOURCE, "Dockerfile": "F", "docker-compose.yml": "V"})
 
         resp = client.post(
             "/ingest",
@@ -157,7 +157,7 @@ class TestFullPipelineE2E(unittest.TestCase):
     def test_code_persisted_for_bridge(self):
         """After upload, code is persisted to /tmp/nasiko/{artifact_id}/code/."""
         client = _build_client()
-        zip_buf = _create_zip({"server.py": MCP_SERVER_SOURCE})
+        zip_buf = _create_zip({"src/main.py": MCP_SERVER_SOURCE, "Dockerfile": "F", "docker-compose.yml": "V"})
 
         resp = client.post(
             "/ingest",
@@ -168,12 +168,12 @@ class TestFullPipelineE2E(unittest.TestCase):
         code_path = body.get("code_path")
         self.assertIsNotNone(code_path)
         self.assertTrue(os.path.exists(code_path))
-        self.assertTrue(os.path.exists(os.path.join(code_path, "server.py")))
+        self.assertTrue(os.path.exists(os.path.join(code_path, "src", "main.py")))
 
     def test_linker_can_read_generated_manifest(self):
         """R4 linker can load the manifest that R1→R3 generated."""
         client = _build_client()
-        zip_buf = _create_zip({"server.py": MCP_SERVER_SOURCE})
+        zip_buf = _create_zip({"src/main.py": MCP_SERVER_SOURCE, "Dockerfile": "F", "docker-compose.yml": "V"})
 
         resp = client.post(
             "/ingest",
@@ -190,7 +190,7 @@ class TestFullPipelineE2E(unittest.TestCase):
     def test_linker_rejects_before_bridge_ready(self):
         """R4 linker returns 400 when bridge.json doesn't exist (bridge not started)."""
         client = _build_client()
-        zip_buf = _create_zip({"server.py": MCP_SERVER_SOURCE})
+        zip_buf = _create_zip({"src/main.py": MCP_SERVER_SOURCE, "Dockerfile": "F", "docker-compose.yml": "V"})
 
         resp = client.post(
             "/ingest",
@@ -207,7 +207,7 @@ class TestFullPipelineE2E(unittest.TestCase):
     def test_linker_accepts_after_bridge_ready(self):
         """R4 linker succeeds after bridge.json is written with status=ready."""
         client = _build_client()
-        zip_buf = _create_zip({"server.py": MCP_SERVER_SOURCE})
+        zip_buf = _create_zip({"src/main.py": MCP_SERVER_SOURCE, "Dockerfile": "F", "docker-compose.yml": "V"})
 
         resp = client.post(
             "/ingest",
