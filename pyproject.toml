@@ -12,7 +12,13 @@ dependencies = [
     "fastapi>=0.100",
     "uvicorn>=0.23",
     "tenacity>=8.0",
+    "python-multipart>=0.0.6",
+    "opentelemetry-api>=1.36.0",
+    "opentelemetry-sdk>=1.36.0",
+    "opentelemetry-exporter-otlp>=1.36.0",
     "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "arize-phoenix>=12.0.0",
+    "redis",
 ]
 
 [project.optional-dependencies]
