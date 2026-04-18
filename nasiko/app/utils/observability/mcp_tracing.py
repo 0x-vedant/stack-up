@@ -34,8 +34,10 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.trace import StatusCode
 
-# Phoenix helper – identical to how tracing_utils.py creates its provider
-from phoenix.otel import register
+# Phoenix helper — imported lazily inside bootstrap_mcp_tracing() to avoid
+# hard dependency.  When phoenix is not installed, the module still loads
+# and all functions work (tracing is just silently disabled).
+_register = None  # set by bootstrap_mcp_tracing if phoenix is available
 
 # ---------------------------------------------------------------------------
 # Logger – uses the same "observability" logger namespace as tracing_utils.py
@@ -103,6 +105,7 @@ def bootstrap_mcp_tracing(
         # ``register()`` creates a TracerProvider *and* sets it as the global
         # provider.  ``auto_instrument=False`` because we don't need LangChain /
         # CrewAI instrumentors here — we only care about FastAPI + manual spans.
+        from phoenix.otel import register
         provider = register(
             project_name=project_name,
             endpoint=endpoint,
