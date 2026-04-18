@@ -13,7 +13,9 @@ def handle_redis_mcp_deployment(event_payload: dict):
     if event_type == "MCP_DEPLOYMENT_READY":
         mcp_artifact_id = event_payload.get("artifact_id")
         logger.info(f"[R4 Listener] Received MCP deployment ready event for {mcp_artifact_id}.")
-        # Allows R4 state tracker to release the block on /link
-        pass
+        
+        # Wire to state orchestrator release logic 
+        from nasiko.app.utils.orchestrate_state import mark_mcp_ready
+        mark_mcp_ready(mcp_artifact_id)
     else:
         logger.debug(f"[R4 Listener] Ignoring irrelevant event type {event_type}")

@@ -34,11 +34,11 @@ def get_manifest(mcp_artifact_id: str) -> dict:
 def link_agent_to_mcp(req: LinkRequest):
     """
     Priority 3: Binds an orchestrating agent to an MCP child agent.
-    Must verify the target bridge status is RUNNING before proceeding.
+    Must verify the target bridge status is 'ready' before proceeding.
     """
     status = get_bridge_status(req.mcp_artifact_id)
-    if status != "RUNNING" and status != "ready": 
-        raise HTTPException(status_code=400, detail=f"Cannot link. MCP Bridge status is {status}, expected RUNNING.")
+    if status != "ready": 
+        raise HTTPException(status_code=400, detail=f"Cannot link. MCP Bridge status is {status}, expected ready.")
 
     manifest = get_manifest(req.mcp_artifact_id)
     

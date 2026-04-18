@@ -25,8 +25,23 @@ class OrchestrateState:
             return json.load(f)
 
     def _save(self, state: Dict[str, Any]) -> None:
-        with open(self.state_file, "w") as f:
+        import tempfile
+        import os
+        
+        # Flaw 3: Atomic writes to prevent corruption.
+        fd, temp_path = tempfile.mkstemp(dir=self.workflow_dir, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
             json.dump(state, f, indent=4)
+        
+        os.replace(temp_path, self.state_file)
+
+# Flaw 2 Integration Hook
+def mark_mcp_ready(artifact_id: str) -> None:
+    """Invoked by the redis listener to safely swap backend orchestration flags."""
+    logger.info(f"Orchestration State caching ready flip for {artifact_id}")
+    # Updates the bridge configuration mock status 
+    state = OrchestrateState(artifact_id)
+    state.complete()
 
     def log_invocation(self, tool_name: str, args: Any, result: Any):
         state = self._load()
