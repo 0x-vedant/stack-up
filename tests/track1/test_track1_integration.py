@@ -1,4 +1,4 @@
-"""Track 1 Integration Tests — MCP Server Publishing and Agent Integration.
+"""Track 1 Integration Tests -- MCP Server Publishing and Agent Integration.
 
 Required tests from the problem statement:
   1. Upload a valid stdio MCP server -> expect 200, detection correct
@@ -10,7 +10,7 @@ These tests exercise real code paths through R1 detector, R3 manifest
 generator, R2 bridge server, and R4 linker using filesystem fixtures
 and FastAPI TestClient.  No tautologies.
 
-Total: 22 tests across 5 classes.
+Total: 25 tests across 5 classes.
 """
 
 import json
@@ -24,16 +24,9 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-# ---------------------------------------------------------------------------
-# Ensure both R1/ and R3/ are importable from the repo root
-# ---------------------------------------------------------------------------
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(_REPO_ROOT / "R1"))
-sys.path.insert(0, str(_REPO_ROOT))
-
-from app.ingestion.detector import detect_artifact_type
-from app.ingestion.models import ArtifactType, DetectionConfidence
-from app.ingestion.exceptions import AmbiguousArtifactError
+from nasiko.app.ingestion.detector import detect_artifact_type
+from nasiko.app.ingestion.models import ArtifactType, DetectionConfidence
+from nasiko.app.ingestion.exceptions import AmbiguousArtifactError
 from R3.parser import parse_tools, parse_all
 from R3.generator import MCPManifest
 
@@ -142,6 +135,14 @@ def _create_zip(files: dict[str, str]) -> BytesIO:
     return buf
 
 
+def _build_ingest_client() -> TestClient:
+    """Build a TestClient for the nasiko ingest endpoint."""
+    from nasiko.api.v1.ingest import router as ingest_router
+    app = FastAPI()
+    app.include_router(ingest_router)
+    return TestClient(app)
+
+
 # ==========================================================================
 # TEST 1: Upload a valid stdio MCP server -> 200, correct detection
 # ==========================================================================
@@ -203,12 +204,7 @@ class TestValidMCPServerUpload(unittest.TestCase):
 
     def test_ingest_endpoint_returns_200(self):
         """POST /ingest with valid MCP server zip -> 200 with correct detection."""
-        # Import the router and build test app
-        from api.v1.ingest import router as ingest_router
-        app = FastAPI()
-        app.include_router(ingest_router)
-        client = TestClient(app)
-
+        client = _build_ingest_client()
         zip_buf = _create_zip({"server.py": VALID_MCP_SERVER})
 
         resp = client.post(
@@ -221,6 +217,41 @@ class TestValidMCPServerUpload(unittest.TestCase):
         self.assertEqual(body["artifact_type"], "MCP_SERVER")
         self.assertEqual(body["detected_framework"], "mcp")
         self.assertEqual(body["confidence"], "HIGH")
+
+    def test_ingest_mcp_triggers_manifest_generation(self):
+        """POST /ingest with MCP server -> manifest_generated=True with tools."""
+        client = _build_ingest_client()
+        zip_buf = _create_zip({"server.py": VALID_MCP_SERVER})
+
+        resp = client.post(
+            "/ingest",
+            files={"file": ("mcp_server.zip", zip_buf, "application/zip")},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body.get("manifest_generated", False),
+                        "MCP upload should auto-generate manifest")
+        manifest = body.get("manifest", {})
+        self.assertGreater(len(manifest.get("tools", [])), 0,
+                           "Manifest should contain tools")
+
+    def test_ingest_mcp_manifest_has_resources_and_prompts(self):
+        """POST /ingest with MCP server -> manifest contains resources + prompts."""
+        client = _build_ingest_client()
+        zip_buf = _create_zip({"server.py": VALID_MCP_SERVER})
+
+        resp = client.post(
+            "/ingest",
+            files={"file": ("mcp_server.zip", zip_buf, "application/zip")},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        manifest = resp.json().get("manifest", {})
+        self.assertEqual(len(manifest.get("resources", [])), 2,
+                         "Manifest should contain 2 resources")
+        self.assertEqual(len(manifest.get("prompts", [])), 2,
+                         "Manifest should contain 2 prompts")
 
 
 # ==========================================================================
@@ -260,11 +291,7 @@ class TestMissingEntryPoint(unittest.TestCase):
 
     def test_ingest_endpoint_returns_422_for_empty(self):
         """POST /ingest with zip containing no recognized frameworks -> 422."""
-        from api.v1.ingest import router as ingest_router
-        app = FastAPI()
-        app.include_router(ingest_router)
-        client = TestClient(app)
-
+        client = _build_ingest_client()
         zip_buf = _create_zip({
             "utils.py": "import os\n",
             "config.py": "import sys\n",
@@ -281,10 +308,7 @@ class TestMissingEntryPoint(unittest.TestCase):
 
     def test_ingest_rejects_non_zip(self):
         """POST /ingest with non-zip file -> 400."""
-        from api.v1.ingest import router as ingest_router
-        app = FastAPI()
-        app.include_router(ingest_router)
-        client = TestClient(app)
+        client = _build_ingest_client()
 
         resp = client.post(
             "/ingest",
@@ -350,11 +374,7 @@ class TestAmbiguousArtifactDetection(unittest.TestCase):
 
     def test_ingest_endpoint_returns_422_for_ambiguous(self):
         """POST /ingest with MCP+LangChain zip -> 422 AMBIGUOUS_ARTIFACT."""
-        from api.v1.ingest import router as ingest_router
-        app = FastAPI()
-        app.include_router(ingest_router)
-        client = TestClient(app)
-
+        client = _build_ingest_client()
         zip_buf = _create_zip({
             "server.py": AMBIGUOUS_SOURCE_MCP,
             "agent.py": AMBIGUOUS_SOURCE_LANGCHAIN,
