@@ -46,7 +46,7 @@ class MCPManifest(TypedDict):
 
 _ARTIFACT_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 _MANIFEST_ROOT = "/tmp/nasiko"
-ALLOWED_SOURCE_ROOT = os.environ.get(
+ALLOWED_SOURCE_ROOT: str = os.environ.get(
     "NASIKO_SOURCE_ROOT", "/tmp/nasiko/uploads"
 )
 
@@ -86,9 +86,14 @@ def _build_input_schema(tool: ToolDefinition) -> InputSchema:
 
 
 def _validate_source_path(source_path: str) -> None:
-    real = os.path.realpath(source_path)
-    allowed = os.path.realpath(ALLOWED_SOURCE_ROOT)
-    if not real.startswith(allowed + os.sep) and real != allowed:
+    """Raise ValueError if source_path escapes ALLOWED_SOURCE_ROOT.
+
+    Uses os.path.realpath() to resolve symlinks before comparison,
+    preventing symlink traversal attacks.
+    """
+    real = os.path.realpath(os.path.abspath(source_path))
+    allowed = os.path.realpath(os.path.abspath(ALLOWED_SOURCE_ROOT))
+    if not (real.startswith(allowed + os.sep) or real == allowed):
         raise ValueError(
             f"source_path outside allowed root: {source_path!r}"
         )
