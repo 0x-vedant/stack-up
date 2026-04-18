@@ -27,7 +27,7 @@ import subprocess
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
@@ -716,3 +716,48 @@ class TestConcurrentStartGuard:
         assert "dead-art" not in _bridges or True  # dead entry was cleared
 
         _bridges.clear()
+
+
+class TestStatusUpdateEndpoint:
+    """Verifies the new PATCH /mcp/{id}/status endpoint behavior."""
+
+    @patch("nasiko.mcp_bridge.server.Path.exists", return_value=False)
+    def test_patch_status_returns_404_when_no_bridge(self, mock_exists):
+        """PATCH /status on nonexistent artifact -> 404."""
+        from nasiko.mcp_bridge.server import update_status, StatusUpdateRequest
+        from fastapi import HTTPException
+        
+        with pytest.raises(HTTPException) as exc_info:
+            update_status("missing-art", StatusUpdateRequest(status="ready"))
+            
+        assert exc_info.value.status_code == 404
+        assert "not found" in exc_info.value.detail.lower()
+
+    @patch("os.replace")
+    @patch("os.fdopen")
+    @patch("tempfile.mkstemp", return_value=(999, "/tmp/mock.tmp"))
+    @patch("nasiko.mcp_bridge.server.Path.exists", return_value=True)
+    def test_patch_status_updates_bridge_json(self, mock_exists, mock_mkstemp, mock_fdopen, mock_replace):
+        """PATCH /status writes to bridge.json atomically."""
+        from nasiko.mcp_bridge.server import update_status, StatusUpdateRequest
+        
+        mock_data = {"status": "starting", "artifact_id": "art-123"}
+        mock_file_read = mock_open(read_data=json.dumps(mock_data))
+        
+        with patch("builtins.open", mock_file_read):
+            result = update_status("art-123", StatusUpdateRequest(status="ready"))
+            
+            assert result == {"artifact_id": "art-123", "status": "ready"}
+            
+            # Verify atomic write sequence
+            mock_mkstemp.assert_called_once()
+            mock_fdopen.assert_called_once_with(999, "w")
+            
+            # Verify the written json contains the new "ready" status
+            mock_file_write = mock_fdopen.return_value.__enter__.return_value
+            written = "".join([call.args[0] for call in mock_file_write.write.call_args_list])
+            assert json.loads(written)["status"] == "ready"
+            
+            # Verify os.replace swaps it in atomically
+            mock_replace.assert_called_once()
+            assert "bridge.json" in str(mock_replace.call_args[0][1])
