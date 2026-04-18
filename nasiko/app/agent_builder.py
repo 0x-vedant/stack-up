@@ -39,9 +39,20 @@ def inject_mcp_tools(task_object: "Task", mcp_artifact_id: str, manifest: dict) 
     for tool_def in manifest.get("tools", []):
         props = tool_def.get("input_schema", {}).get("properties", {})
         required = set(tool_def.get("input_schema", {}).get("required", []))
+        
+        # Convert schema props natively bypassing "str" overrides
+        type_mapping = {
+            "integer": int,
+            "number": float,
+            "boolean": bool,
+            "string": str,
+            "object": dict,
+            "array": list
+        }
+        
         fields = {
-            k: (str, PydanticField(...)) if k in required
-            else (str, PydanticField(None))
+            k: (type_mapping.get(props[k].get("type", "string") if isinstance(props[k], dict) else "string", str), PydanticField(...)) if k in required
+            else (type_mapping.get(props[k].get("type", "string") if isinstance(props[k], dict) else "string", str), PydanticField(None))
             for k in props
         }
         DynamicSchema = create_model(f"{tool_def['name']}_schema", **fields)

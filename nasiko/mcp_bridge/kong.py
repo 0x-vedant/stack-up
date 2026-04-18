@@ -31,7 +31,7 @@ class KongRegistrar:
         service_name = f"mcp-{artifact_id}"
 
         # ------------------------------------------------------------------
-        # Step 1 — Create Kong service
+        # Step 1 & 2 — Create Kong service and route over one TCP connection
         # ------------------------------------------------------------------
         with httpx.Client(timeout=5.0) as client:
             svc_resp = client.post(
@@ -42,18 +42,14 @@ class KongRegistrar:
                 },
             )
 
-        if not (200 <= svc_resp.status_code < 300):
-            raise KongRegistrationError(
-                f"Kong service creation failed "
-                f"(HTTP {svc_resp.status_code}): {svc_resp.text}"
-            )
+            if not (200 <= svc_resp.status_code < 300):
+                raise KongRegistrationError(
+                    f"Kong service creation failed "
+                    f"(HTTP {svc_resp.status_code}): {svc_resp.text}"
+                )
 
-        kong_service_id: str = svc_resp.json()["id"]
+            kong_service_id: str = svc_resp.json()["id"]
 
-        # ------------------------------------------------------------------
-        # Step 2 — Create Kong route on that service
-        # ------------------------------------------------------------------
-        with httpx.Client(timeout=5.0) as client:
             route_resp = client.post(
                 f"{self.admin_url}/services/{service_name}/routes",
                 json={

@@ -49,10 +49,26 @@ class OrchestrateState:
         state["status"] = "completed"
         self._save(state)
 
-# Flaw 2 Integration Hook
 def mark_mcp_ready(artifact_id: str) -> None:
     """Invoked by the redis listener to safely swap backend orchestration flags."""
     logger.info(f"Orchestration State caching ready flip for {artifact_id}")
+    
+    # Priority Fix: the Linker API asserts ready status off bridge.json natively.
+    bridge_file = Path(f"/tmp/nasiko/{artifact_id}/bridge.json")
+    if bridge_file.exists():
+        try:
+            with open(bridge_file, "r") as f:
+                data = json.load(f)
+            data["status"] = "ready"
+            
+            import tempfile, os
+            fd, tmp = tempfile.mkstemp(dir=bridge_file.parent, suffix=".tmp")
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=4)
+            os.replace(tmp, bridge_file)
+        except Exception as e:
+            logger.error(f"Failed to flip bridge.json status for {artifact_id}: {e}")
+            
     # Updates the bridge configuration mock status 
     state = OrchestrateState(artifact_id)
     state.complete()

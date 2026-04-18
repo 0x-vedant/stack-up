@@ -43,8 +43,18 @@ def start_bridge(artifact_id: str, bridge_url: str = "http://localhost:8000") ->
     """Attempts to handle 500 error recoveries by triggering POST /start."""
     try:
         url = f"{bridge_url.rstrip('/')}/mcp/{artifact_id}/start"
+        
+        # Scrapes dead bridge.json memory for the original entry point path preventing HTTP 422
+        entry_point = "main.py"
+        try:
+            import json
+            with open(f"/tmp/nasiko/{artifact_id}/bridge.json", "r") as f:
+                entry_point = json.load(f).get("entry_point", "main.py")
+        except Exception:
+            pass
+
         # Flaw 5 fixed: Start endpoint executed blindly without locking on bridge.json 
-        resp = httpx.post(url, json={"kong_admin_url": "http://localhost:8001"})
+        resp = httpx.post(url, json={"kong_admin_url": "http://localhost:8001", "entry_point": entry_point})
         
         # 409 Conflict means it's natively already running, proceed.
         return resp.status_code in (200, 409)
@@ -87,6 +97,8 @@ def execute_bridge_call(artifact_id: str, tool_name: str, arguments: dict, trace
             raise AgentCallError(f"Agent returned JSON-RPC error: {error_detail}")
             
         resp.raise_for_status()
+        # Fallback return string for unhandled successful HTTP non-error codes avoiding implicit None
+        return resp.text
 
     except httpx.HTTPStatusError as e:
         # Flaw 2 fixed: explicitly catch standard 4xx network errors so they don't break CrewAI natively.
