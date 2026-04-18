@@ -1,7 +1,7 @@
-"""Static parser for MCP tool definitions.
+"""Static parser for MCP tool, resource, and prompt definitions.
 
-Extracts tool metadata from Python source code using ast.parse() only.
-No exec(), eval(), import, or subprocess — pure static analysis.
+Extracts metadata from Python source code using ast.parse() only.
+No exec(), eval(), import, or subprocess -- pure static analysis.
 
 Part of the Nasiko MCP Manifest Generator (R3).
 """
@@ -24,6 +24,20 @@ class ParameterDefinition(TypedDict):
 
 
 class ToolDefinition(TypedDict):
+    name: str
+    docstring: str | None
+    parameters: list[ParameterDefinition]
+
+
+class ResourceDefinition(TypedDict):
+    """An MCP resource discovered from @mcp.resource('uri') decorators."""
+    uri: str
+    name: str
+    docstring: str | None
+
+
+class PromptDefinition(TypedDict):
+    """An MCP prompt discovered from @mcp.prompt() decorators."""
     name: str
     docstring: str | None
     parameters: list[ParameterDefinition]
@@ -72,7 +86,7 @@ def _is_tool_decorator(dec: ast.expr) -> tuple[bool, str | None]:
     the no-parens form (``@app.tool``) produces a bare ``Attribute`` node.
     """
 
-    # Pattern 3: @app.tool  (no parentheses → bare Attribute)
+    # Pattern 3: @app.tool  (no parentheses -> bare Attribute)
     if isinstance(dec, ast.Attribute) and not isinstance(dec, ast.Call):
         if (
             dec.attr == "tool"
@@ -95,7 +109,67 @@ def _is_tool_decorator(dec: ast.expr) -> tuple[bool, str | None]:
             for kw in dec.keywords:
                 if kw.arg == "name" and isinstance(kw.value, ast.Constant):
                     candidate = kw.value.value
-                    # Empty-string override → treat as no override.
+                    # Empty-string override -> treat as no override.
+                    if isinstance(candidate, str) and candidate:
+                        name_override = candidate
+            return True, name_override
+
+    return False, None
+
+
+def _is_resource_decorator(dec: ast.expr) -> tuple[bool, str | None]:
+    """Determine if *dec* is a recognised ``@<host>.resource(uri)`` decorator.
+
+    Returns ``(True, uri_string | None)`` when matched.
+    """
+    if isinstance(dec, ast.Call):
+        func = dec.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "resource"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in TOOL_HOSTS
+        ):
+            # Extract the URI from the first positional arg
+            uri: str | None = None
+            if dec.args and isinstance(dec.args[0], ast.Constant):
+                uri = str(dec.args[0].value)
+            # Also check uri= keyword
+            for kw in dec.keywords:
+                if kw.arg == "uri" and isinstance(kw.value, ast.Constant):
+                    uri = str(kw.value.value)
+            return True, uri
+
+    return False, None
+
+
+def _is_prompt_decorator(dec: ast.expr) -> tuple[bool, str | None]:
+    """Determine if *dec* is a recognised ``@<host>.prompt()`` decorator.
+
+    Returns ``(True, name_override | None)`` when matched.
+    """
+    # Bare form: @mcp.prompt
+    if isinstance(dec, ast.Attribute) and not isinstance(dec, ast.Call):
+        if (
+            dec.attr == "prompt"
+            and isinstance(dec.value, ast.Name)
+            and dec.value.id in TOOL_HOSTS
+        ):
+            return True, None
+
+    # Call form: @mcp.prompt() / @mcp.prompt(name="...")
+    if isinstance(dec, ast.Call):
+        func = dec.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "prompt"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in TOOL_HOSTS
+        ):
+            name_override: str | None = None
+            for kw in dec.keywords:
+                if kw.arg == "name" and isinstance(kw.value, ast.Constant):
+                    candidate = kw.value.value
                     if isinstance(candidate, str) and candidate:
                         name_override = candidate
             return True, name_override
@@ -115,7 +189,7 @@ def _map_type(annotation_str: str | None) -> dict:
 
     raw = annotation_str.strip()
 
-    # Unwrap Optional[X] → X
+    # Unwrap Optional[X] -> X
     if raw.startswith("Optional[") and raw.endswith("]"):
         raw = raw[len("Optional["):-1].strip()
 
@@ -138,7 +212,7 @@ def _map_type(annotation_str: str | None) -> dict:
     if base in _TYPE_MAP:
         return dict(_TYPE_MAP[base])
 
-    # Suffix heuristic (e.g. OrderedDict → object, FrozenList → array).
+    # Suffix heuristic (e.g. OrderedDict -> object, FrozenList -> array).
     for suffix, schema in _SUFFIX_MAP.items():
         if base.endswith(suffix):
             return dict(schema)
@@ -212,6 +286,86 @@ def _extract_params(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> list[Paramete
 
 
 # ---------------------------------------------------------------------------
+# Internal extraction helpers
+# ---------------------------------------------------------------------------
+
+def _try_extract_tool(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> ToolDefinition | None:
+    """Return a ``ToolDefinition`` if *fn* has a tool decorator, else ``None``."""
+
+    for dec in fn.decorator_list:
+        is_tool, name_override = _is_tool_decorator(dec)
+        if is_tool:
+            tool_name = name_override if name_override else fn.name
+            docstring: str | None = ast.get_docstring(fn)
+            parameters = _extract_params(fn)
+
+            return ToolDefinition(
+                name=tool_name,
+                docstring=docstring,
+                parameters=parameters,
+            )
+
+    return None
+
+
+def _try_extract_resource(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> ResourceDefinition | None:
+    """Return a ``ResourceDefinition`` if *fn* has a resource decorator, else ``None``."""
+
+    for dec in fn.decorator_list:
+        is_resource, uri = _is_resource_decorator(dec)
+        if is_resource:
+            docstring: str | None = ast.get_docstring(fn)
+            return ResourceDefinition(
+                uri=uri if uri else f"resource://{fn.name}",
+                name=fn.name,
+                docstring=docstring,
+            )
+
+    return None
+
+
+def _try_extract_prompt(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> PromptDefinition | None:
+    """Return a ``PromptDefinition`` if *fn* has a prompt decorator, else ``None``."""
+
+    for dec in fn.decorator_list:
+        is_prompt, name_override = _is_prompt_decorator(dec)
+        if is_prompt:
+            prompt_name = name_override if name_override else fn.name
+            docstring: str | None = ast.get_docstring(fn)
+            parameters = _extract_params(fn)
+
+            return PromptDefinition(
+                name=prompt_name,
+                docstring=docstring,
+                parameters=parameters,
+            )
+
+    return None
+
+
+def _process_function_node(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+    tools: list[ToolDefinition],
+    resources: list[ResourceDefinition],
+    prompts: list[PromptDefinition],
+) -> None:
+    """Try to extract a tool, resource, or prompt from a function node."""
+    tool = _try_extract_tool(fn)
+    if tool is not None:
+        tools.append(tool)
+        return
+
+    resource = _try_extract_resource(fn)
+    if resource is not None:
+        resources.append(resource)
+        return
+
+    prompt = _try_extract_prompt(fn)
+    if prompt is not None:
+        prompts.append(prompt)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -235,7 +389,7 @@ def parse_tools(source_code: str) -> list[ToolDefinition]:
 
     tools: list[ToolDefinition] = []
 
-    # Only iterate top-level statements — never recurse into function
+    # Only iterate top-level statements -- never recurse into function
     # bodies, which avoids capturing nested ``def``s.
     for node in ast.iter_child_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -255,20 +409,40 @@ def parse_tools(source_code: str) -> list[ToolDefinition]:
     return tools
 
 
-def _try_extract_tool(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> ToolDefinition | None:
-    """Return a ``ToolDefinition`` if *fn* has a tool decorator, else ``None``."""
+def parse_all(source_code: str) -> tuple[
+    list[ToolDefinition],
+    list[ResourceDefinition],
+    list[PromptDefinition],
+]:
+    """Parse Python *source_code* and return all MCP definitions.
 
-    for dec in fn.decorator_list:
-        is_tool, name_override = _is_tool_decorator(dec)
-        if is_tool:
-            tool_name = name_override if name_override else fn.name
-            docstring: str | None = ast.get_docstring(fn)
-            parameters = _extract_params(fn)
+    Returns a tuple of (tools, resources, prompts).
 
-            return ToolDefinition(
-                name=tool_name,
-                docstring=docstring,
-                parameters=parameters,
-            )
+    Only **top-level** functions and class methods decorated with recognised
+    ``@<host>.tool``, ``@<host>.resource``, or ``@<host>.prompt`` patterns
+    are returned.  Nested function definitions are ignored.
 
-    return None
+    Raises ``ValueError`` when *source_code* is not valid Python.
+    """
+
+    if not source_code or not source_code.strip():
+        return [], [], []
+
+    try:
+        tree = ast.parse(source_code)
+    except SyntaxError as e:
+        raise ValueError(f"Invalid Python: {e}") from e
+
+    tools: list[ToolDefinition] = []
+    resources: list[ResourceDefinition] = []
+    prompts: list[PromptDefinition] = []
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _process_function_node(node, tools, resources, prompts)
+        elif isinstance(node, ast.ClassDef):
+            for class_item in node.body:
+                if isinstance(class_item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    _process_function_node(class_item, tools, resources, prompts)
+
+    return tools, resources, prompts

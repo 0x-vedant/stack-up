@@ -43,10 +43,24 @@ class MCPToolResponse(BaseModel):
     input_schema: InputSchemaResponse
 
 
+class MCPResourceResponse(BaseModel):
+    uri: str
+    name: str
+    description: str | None = None
+
+
+class MCPPromptResponse(BaseModel):
+    name: str
+    description: str | None = None
+    input_schema: InputSchemaResponse
+
+
 class MCPManifestResponse(BaseModel):
     artifact_id: str
     generated_at: str
     tools: list[MCPToolResponse]
+    resources: list[MCPResourceResponse] = []
+    prompts: list[MCPPromptResponse] = []
 
 
 # ---------------------------------------------------------------------------
