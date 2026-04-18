@@ -324,6 +324,13 @@ try:
 except ImportError:
     pass
 
+# Mount R3 manifest generator router so /manifest is reachable
+try:
+    from R3.endpoints import router as manifest_router
+    app.include_router(manifest_router)
+except ImportError:
+    pass
+
 instrument_mcp_bridge(app)
 _tracer = bootstrap_mcp_tracing("mcp-bridge")
 
