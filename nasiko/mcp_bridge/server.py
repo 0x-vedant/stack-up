@@ -11,24 +11,17 @@ from __future__ import annotations
 import json
 import socket
 import subprocess
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from nasiko.mcp_bridge.kong import KongRegistrar
 from nasiko.mcp_bridge.models import BridgeConfig
-
-from nasiko.app.utils.observability.mcp_tracing import (
-    bootstrap_mcp_tracing,
-    instrument_mcp_bridge,
-    create_tool_call_span,
-    record_tool_result,
-    record_tool_error,
-)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -182,7 +175,7 @@ class BridgeServer:
 
         # 2. Spawn subprocess — NO shell=True, unbuffered I/O
         proc = subprocess.Popen(
-            ["python", self.entry_point],
+            [sys.executable, self.entry_point],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -272,15 +265,54 @@ class BridgeServer:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# R5 observability -- guarded so bridge works without opentelemetry installed
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+try:
+    from nasiko.app.utils.observability.mcp_tracing import (
+        bootstrap_mcp_tracing,
+        instrument_mcp_bridge,
+        create_tool_call_span,
+        record_tool_result,
+        record_tool_error,
+    )
+    _HAS_TRACING = True
+except ImportError:
+    _HAS_TRACING = False
+
+    def bootstrap_mcp_tracing(*a, **kw):
+        return None
+
+    def instrument_mcp_bridge(*a, **kw):
+        pass
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def create_tool_call_span(*a, **kw):
+        class _Null:
+            def set_attribute(self, *a, **kw): pass
+            def set_status(self, *a, **kw): pass
+            def record_exception(self, *a, **kw): pass
+        yield _Null()
+
+    def record_tool_result(*a, **kw):
+        pass
+
+    def record_tool_error(*a, **kw):
+        pass
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FastAPI application
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app = FastAPI(title="Nasiko MCP Bridge")
 
-# Mount R1 ingest endpoint so /ingest is reachable
+# Linker integration: use include_router (NOT app.mount) for APIRouter instances.
 try:
-    from nasiko.api.v1.ingest import router as ingest_router
-    app.include_router(ingest_router)
+    from nasiko.app.utils.agent_mcp_linker import app as linker_router
+    app.include_router(linker_router, prefix="/agent")
 except ImportError:
     pass
 
@@ -337,6 +369,45 @@ def health_check(artifact_id: str) -> dict[str, Any]:
     return {"artifact_id": artifact_id, "alive": alive}
 
 
+class StatusUpdateRequest(BaseModel):
+    """Request body for PATCH /mcp/{artifact_id}/status.
+
+    Constrained to valid BridgeConfig status values to prevent
+    data integrity violations in bridge.json.
+    """
+    status: Literal["starting", "ready", "failed"]
+
+
+@app.patch("/mcp/{artifact_id}/status")
+def update_status(artifact_id: str, body: StatusUpdateRequest) -> dict[str, Any]:
+    """Allow orchestrators (R4) to update bridge status via HTTP.
+
+    This respects the R2 ownership boundary — only R2 writes to bridge.json.
+    R4 calls this endpoint instead of mutating the file directly.
+    """
+    bridge_file = Path(f"/tmp/nasiko/{artifact_id}/bridge.json")
+    if not bridge_file.exists():
+        raise HTTPException(status_code=404, detail="Bridge config not found")
+
+    import os
+    import tempfile
+    try:
+        with open(bridge_file, "r") as f:
+            data = json.load(f)
+
+        data["status"] = body.status
+
+        # Atomic write
+        fd, tmp = tempfile.mkstemp(dir=bridge_file.parent, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=4)
+        os.replace(tmp, bridge_file)
+
+        return {"artifact_id": artifact_id, "status": body.status}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.post("/mcp/{artifact_id}/call")
 def call_tool(artifact_id: str, body: ToolCallRequest) -> dict[str, Any]:
     """Proxy a tool call to the running MCP agent."""
@@ -356,3 +427,4 @@ def call_tool(artifact_id: str, body: ToolCallRequest) -> dict[str, Any]:
         except MCPToolCallError as exc:
             record_tool_error(span, exc)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+

@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import json
 import subprocess
+import sys
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -282,7 +283,7 @@ class TestStartMethod:
         call_kwargs = mock_popen.call_args
         cmd = call_kwargs[0][0]
         assert isinstance(cmd, list), f"Popen cmd is {type(cmd)}, must be list"
-        assert cmd == ["python", "/entry.py"]
+        assert cmd == [sys.executable, "/entry.py"]
         assert call_kwargs[1].get("shell") is not True
         assert call_kwargs[1].get("bufsize") == 0
 
@@ -559,7 +560,7 @@ class TestConstraints:
     def _load_sources(self):
         self.sources: dict[str, str] = {}
         for f in _SOURCE_DIR.glob("*.py"):
-            self.sources[f.name] = f.read_text(encoding="utf-8")
+            self.sources[f.name] = f.read_text()
 
     def test_no_shell_true(self):
         """No Popen (or any call) may pass shell=True."""
@@ -708,3 +709,94 @@ class TestConcurrentStartGuard:
         assert "dead-art" not in _bridges or True  # dead entry was cleared
 
         _bridges.clear()
+
+
+class TestStatusEndpoint:
+    """Tests for PATCH /mcp/{artifact_id}/status endpoint.
+
+    Verifies:
+    - Route exists with PATCH method
+    - StatusUpdateRequest rejects invalid status strings
+    - StatusUpdateRequest accepts valid Literal values
+    - Endpoint returns 404 when no bridge.json exists
+    - Endpoint updates bridge.json atomically when file exists
+    """
+
+    def _routes(self) -> dict[str, set[str]]:
+        return {
+            r.path: r.methods
+            for r in app.routes
+            if hasattr(r, "methods")
+        }
+
+    def test_status_route_exists(self):
+        """PATCH /mcp/{artifact_id}/status must be registered."""
+        routes = self._routes()
+        assert "/mcp/{artifact_id}/status" in routes
+        assert "PATCH" in routes["/mcp/{artifact_id}/status"]
+
+    def test_status_request_rejects_invalid_status(self):
+        """StatusUpdateRequest must reject strings not in Literal."""
+        from nasiko.mcp_bridge.server import StatusUpdateRequest
+        from pydantic import ValidationError
+
+        for bad_status in ["running", "RUNNING", "banana", "active", ""]:
+            with pytest.raises(ValidationError):
+                StatusUpdateRequest(status=bad_status)
+
+    def test_status_request_accepts_valid_values(self):
+        """StatusUpdateRequest must accept all three Literal values."""
+        from nasiko.mcp_bridge.server import StatusUpdateRequest
+
+        for good_status in ["starting", "ready", "failed"]:
+            req = StatusUpdateRequest(status=good_status)
+            assert req.status == good_status
+
+    def test_patch_returns_404_when_no_bridge_file(self, tmp_path):
+        """PATCH /status on a nonexistent artifact returns 404."""
+        from nasiko.mcp_bridge.server import update_status, StatusUpdateRequest
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            update_status("nonexistent-id-999", StatusUpdateRequest(status="ready"))
+        assert exc_info.value.status_code == 404
+
+    def test_patch_updates_bridge_json(self, tmp_path):
+        """PATCH /status atomically updates the status in bridge.json."""
+        import os
+        import json as _json
+        from nasiko.mcp_bridge.server import update_status, StatusUpdateRequest
+
+        artifact_id = "test-patch-update"
+        bridge_dir = Path(f"/tmp/nasiko/{artifact_id}")
+        bridge_dir.mkdir(parents=True, exist_ok=True)
+        bridge_file = bridge_dir / "bridge.json"
+
+        # Write an initial bridge config
+        initial = {
+            "artifact_id": artifact_id,
+            "port": 8100,
+            "entry_point": "test.py",
+            "pid": 12345,
+            "kong_service_id": "svc-1",
+            "kong_route_id": "rt-1",
+            "status": "starting",
+            "created_at": "2026-01-01T00:00:00Z",
+            "bridge_json_path": str(bridge_file),
+        }
+        bridge_file.write_text(_json.dumps(initial))
+
+        try:
+            result = update_status(artifact_id, StatusUpdateRequest(status="ready"))
+            assert result["status"] == "ready"
+
+            # Verify file was updated
+            with open(bridge_file) as f:
+                persisted = _json.load(f)
+            assert persisted["status"] == "ready"
+            # Other fields untouched
+            assert persisted["port"] == 8100
+            assert persisted["artifact_id"] == artifact_id
+        finally:
+            import shutil
+            shutil.rmtree(bridge_dir, ignore_errors=True)
